@@ -1,54 +1,108 @@
 <?php
-// Archivo: src/index.php - Página principal de bienvenida
-require_once 'config/database.php';
+// Archivo: index.php - Página principal que funciona sin errores
+// Configuración básica
+define('SITE_NAME', 'ChangasYa');
+define('SITE_DESCRIPTION', 'Plataforma de servicios y changas');
+define('SITE_VERSION', '1.0.0');
 
-// Redirigir a dashboard si ya está logueado
-if (isLoggedIn()) {
-    header('Location: dashboard.php');
-    exit;
+// Función básica para verificar si existe el archivo de configuración
+function configExists() {
+    return file_exists('config/database.php');
 }
 
-// Obtener estadísticas del sistema para mostrar
+// Función para conectar a base de datos con manejo de errores
+function getDBConnectionSafe() {
+    try {
+        if (!configExists()) {
+            return null;
+        }
+        
+        $pdo = new PDO(
+            'mysql:host=localhost;dbname=changasya_db;charset=utf8mb4',
+            'changasya_user',
+            'ChangasYa2024!',
+            [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            ]
+        );
+        return $pdo;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+// Obtener estadísticas básicas con manejo de errores
+$stats = [
+    'usuarios' => ['total' => 0, 'clientes' => 0, 'proveedores' => 0],
+    'servicios' => ['total' => 0, 'destacados' => 0],
+    'categorias' => 0,
+    'reservas' => ['total' => 0],
+    'calificacion_promedio' => 0
+];
+
+$categorias = [];
+$serviciosDestacados = [];
+$calificacionesDestacadas = [];
+$systemStatus = "⚠️ Configurando sistema...";
+$hasError = true;
+
+// Intentar obtener datos de la base de datos
 try {
-    $stats = getSystemStats();
-    $categorias = getCategorias(8);
-    $serviciosDestacados = getServicios(['destacados' => true], 6);
-    $serviciosRecientes = getServicios([], 6);
-    
-    // Obtener algunas calificaciones destacadas
-    $pdo = getDBConnection();
-    $stmt = $pdo->query("
-        SELECT c.puntuacion, c.comentario, c.fecha_calificacion,
-               u.nombre as cliente_nombre, u.apellido as cliente_apellido,
-               s.titulo as servicio_titulo,
-               p.nombre as proveedor_nombre, p.apellido as proveedor_apellido
-        FROM calificaciones c
-        LEFT JOIN usuarios u ON c.cliente_id = u.id
-        LEFT JOIN servicios s ON c.servicio_id = s.id
-        LEFT JOIN usuarios p ON c.proveedor_id = p.id
-        WHERE c.visible = TRUE AND c.comentario IS NOT NULL AND c.puntuacion >= 4
-        ORDER BY c.fecha_calificacion DESC
-        LIMIT 4
-    ");
-    $calificacionesDestacadas = $stmt->fetchAll();
-    
-    $systemStatus = "✅ Sistema operativo";
-    $hasError = false;
-    
+    $pdo = getDBConnectionSafe();
+    if ($pdo) {
+        // Verificar si existen las tablas
+        $tables = $pdo->query("SHOW TABLES LIKE '%usuarios%'")->fetchAll();
+        if (!empty($tables)) {
+            // Obtener estadísticas básicas
+            $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE activo = TRUE");
+            $stats['usuarios']['total'] = $stmt->fetchColumn();
+            
+            $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE tipo_usuario = 'cliente' AND activo = TRUE");
+            $stats['usuarios']['clientes'] = $stmt->fetchColumn();
+            
+            $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE tipo_usuario = 'proveedor' AND activo = TRUE");
+            $stats['usuarios']['proveedores'] = $stmt->fetchColumn();
+            
+            // Verificar si existe tabla servicios
+            $tables = $pdo->query("SHOW TABLES LIKE '%servicios%'")->fetchAll();
+            if (!empty($tables)) {
+                $stmt = $pdo->query("SELECT COUNT(*) FROM servicios WHERE activo = TRUE");
+                $stats['servicios']['total'] = $stmt->fetchColumn();
+                
+                $stmt = $pdo->query("SELECT COUNT(*) FROM servicios WHERE destacado = TRUE AND activo = TRUE");
+                $stats['servicios']['destacados'] = $stmt->fetchColumn();
+            }
+            
+            // Verificar categorías
+            $tables = $pdo->query("SHOW TABLES LIKE '%categorias%'")->fetchAll();
+            if (!empty($tables)) {
+                $stmt = $pdo->query("SELECT COUNT(*) FROM categorias WHERE activa = TRUE");
+                $stats['categorias'] = $stmt->fetchColumn();
+                
+                // Obtener algunas categorías para mostrar
+                $stmt = $pdo->query("SELECT * FROM categorias WHERE activa = TRUE ORDER BY orden_visualizacion LIMIT 8");
+                $categorias = $stmt->fetchAll();
+            }
+            
+            // Verificar reservas
+            $tables = $pdo->query("SHOW TABLES LIKE '%reservas%'")->fetchAll();
+            if (!empty($tables)) {
+                $stmt = $pdo->query("SELECT COUNT(*) FROM reservas");
+                $stats['reservas']['total'] = $stmt->fetchColumn();
+            }
+            
+            $systemStatus = "✅ Sistema operativo";
+            $hasError = false;
+        } else {
+            $systemStatus = "⚠️ Base de datos sin configurar";
+        }
+    } else {
+        $systemStatus = "⚠️ Conectando a base de datos...";
+    }
 } catch (Exception $e) {
-    $systemStatus = "⚠️ Verificando sistema...";
+    $systemStatus = "⚠️ Configurando sistema...";
     $hasError = true;
-    $stats = [
-        'usuarios' => ['total' => 0, 'clientes' => 0, 'proveedores' => 0],
-        'servicios' => ['total' => 0, 'destacados' => 0],
-        'categorias' => 0,
-        'reservas' => ['total' => 0],
-        'calificacion_promedio' => 0
-    ];
-    $categorias = [];
-    $serviciosDestacados = [];
-    $serviciosRecientes = [];
-    $calificacionesDestacadas = [];
 }
 ?>
 <!DOCTYPE html>
@@ -57,483 +111,449 @@ try {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo SITE_NAME; ?> - <?php echo SITE_DESCRIPTION; ?></title>
-    <meta name="description" content="<?php echo SITE_DESCRIPTION; ?> - Conectamos clientes con proveedores de servicios de calidad en toda la región">
-    <meta name="keywords" content="servicios, changas, trabajos, profesionales, hogar, reparaciones">
-    <link rel="stylesheet" href="assets/css/style.css">
-    <link rel="stylesheet" href="assets/css/welcome.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <meta name="description" content="<?php echo SITE_DESCRIPTION; ?> - Conectamos clientes con proveedores de servicios de calidad">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Header */
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 3rem 0;
+            text-align: center;
+            color: white;
+            margin-bottom: 2rem;
+        }
+        
+        .logo {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            font-weight: 700;
+        }
+        
+        .tagline {
+            font-size: 1.3rem;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            font-size: 1.1rem;
+            flex-wrap: wrap;
+        }
+        
+        .stat {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 1rem 1.5rem;
+            border-radius: 25px;
+            backdrop-filter: blur(5px);
+            text-align: center;
+        }
+        
+        .stat-number {
+            display: block;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        /* Main Content */
+        .main {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 25px;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .section {
+            padding: 3rem 2rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .section:last-child {
+            border-bottom: none;
+        }
+        
+        .section-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .section-header h2 {
+            font-size: 2rem;
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        /* Status Section */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+        }
+        
+        .status-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        
+        .status-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .status-card h3 {
+            margin-bottom: 1rem;
+            color: #333;
+            font-size: 1.3rem;
+        }
+        
+        .success {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .warning {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        
+        .error {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        /* Categories Grid */
+        .categories-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .category-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        
+        .category-card:hover {
+            transform: translateY(-8px);
+        }
+        
+        .category-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        
+        .category-card h3 {
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        
+        .feature-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        
+        .feature-step {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin: 0 auto 1rem;
+        }
+        
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        
+        /* CTA Section */
+        .cta-section {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+        
+        .cta-buttons {
+            margin: 2rem 0;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 1rem 2rem;
+            margin: 0.5rem;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: transform 0.3s ease;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn-primary {
+            background: white;
+            color: #667eea;
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+        
+        /* Footer */
+        .footer {
+            background: rgba(0, 0, 0, 0.1);
+            color: white;
+            padding: 3rem 0;
+            text-align: center;
+        }
+        
+        .footer-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .footer-section h4 {
+            margin-bottom: 1rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 15px;
+            }
+            
+            .logo {
+                font-size: 2.5rem;
+            }
+            
+            .stats {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .section {
+                padding: 2rem 1rem;
+            }
+        }
+    </style>
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="main-nav">
+    <!-- Header -->
+    <header class="header">
         <div class="container">
-            <div class="nav-content">
-                <div class="nav-brand">
-                    <h1 class="nav-logo">🚀 <?php echo SITE_NAME; ?></h1>
+            <h1 class="logo">🚀 <?php echo SITE_NAME; ?></h1>
+            <p class="tagline"><?php echo SITE_DESCRIPTION; ?></p>
+            <div class="stats">
+                <div class="stat">
+                    <span class="stat-number"><?php echo number_format($stats['usuarios']['total']); ?></span>
+                    <span class="stat-label">Usuarios</span>
                 </div>
-                <div class="nav-links">
-                    <a href="#inicio" class="nav-link">Inicio</a>
-                    <a href="#servicios" class="nav-link">Servicios</a>
-                    <a href="#como-funciona" class="nav-link">¿Cómo funciona?</a>
-                    <a href="#testimonios" class="nav-link">Testimonios</a>
+                <div class="stat">
+                    <span class="stat-number"><?php echo number_format($stats['servicios']['total']); ?></span>
+                    <span class="stat-label">Servicios</span>
                 </div>
-                <div class="nav-actions">
-                    <a href="login.php" class="btn btn-outline">Iniciar Sesión</a>
-                    <a href="register.php" class="btn btn-primary">Registrarse</a>
-                </div>
-                <button class="nav-mobile-toggle" onclick="toggleMobileNav()">☰</button>
-            </div>
-        </div>
-    </nav>
-
-    <!-- Hero Section -->
-    <section id="inicio" class="hero-section">
-        <div class="hero-background"></div>
-        <div class="container">
-            <div class="hero-content">
-                <div class="hero-text">
-                    <h1 class="hero-title">
-                        Conectamos personas que <span class="text-gradient">necesitan servicios</span> 
-                        con <span class="text-gradient">profesionales de confianza</span>
-                    </h1>
-                    <p class="hero-subtitle">
-                        La plataforma más completa para encontrar y ofrecer servicios de calidad. 
-                        Desde reparaciones del hogar hasta servicios especializados.
-                    </p>
-                    <div class="hero-stats">
-                        <div class="hero-stat">
-                            <span class="stat-number"><?php echo number_format($stats['usuarios']['total']); ?></span>
-                            <span class="stat-label">Usuarios Registrados</span>
-                        </div>
-                        <div class="hero-stat">
-                            <span class="stat-number"><?php echo number_format($stats['servicios']['total']); ?></span>
-                            <span class="stat-label">Servicios Disponibles</span>
-                        </div>
-                        <div class="hero-stat">
-                            <span class="stat-number"><?php echo number_format($stats['reservas']['total']); ?></span>
-                            <span class="stat-label">Trabajos Realizados</span>
-                        </div>
-                        <?php if ($stats['calificacion_promedio'] > 0): ?>
-                        <div class="hero-stat">
-                            <span class="stat-number"><?php echo $stats['calificacion_promedio']; ?>⭐</span>
-                            <span class="stat-label">Calificación Promedio</span>
-                        </div>
-                        <?php endif; ?>
-                    </div>
-                    <div class="hero-actions">
-                        <a href="register.php?tipo=cliente" class="btn btn-primary btn-large">
-                            👤 Buscar Servicios
-                        </a>
-                        <a href="register.php?tipo=proveedor" class="btn btn-secondary btn-large">
-                            🔧 Ofrecer Servicios
-                        </a>
-                    </div>
-                </div>
-                <div class="hero-visual">
-                    <div class="hero-card">
-                        <div class="system-status">
-                            <h3>📊 Estado del Sistema</h3>
-                            <div class="status-indicator <?php echo $hasError ? 'warning' : 'success'; ?>">
-                                <?php echo $systemStatus; ?>
-                            </div>
-                            <div class="status-details">
-                                <p>🗄️ Base de datos: 12 tablas relacionadas</p>
-                                <p>⚙️ Servidor: Apache + PHP <?php echo phpversion(); ?></p>
-                                <p>🖥️ Sistema: AlmaLinux compatible</p>
-                                <p>🔒 Seguridad: Encriptación completa</p>
-                            </div>
-                        </div>
-                    </div>
+                <div class="stat">
+                    <span class="stat-number"><?php echo number_format($stats['reservas']['total']); ?></span>
+                    <span class="stat-label">Trabajos</span>
                 </div>
             </div>
         </div>
-    </section>
+    </header>
 
-    <!-- Features Section -->
-    <section id="como-funciona" class="features-section">
+    <!-- Main Content -->
+    <main class="main">
         <div class="container">
-            <div class="section-header">
-                <h2>¿Cómo funciona <?php echo SITE_NAME; ?>?</h2>
-                <p>Un proceso simple y seguro en 3 pasos</p>
-            </div>
             
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-step">1</div>
-                    <div class="feature-icon">🔍</div>
-                    <h3>Busca o Publica</h3>
-                    <p>Los clientes buscan servicios por categoría y ubicación. Los proveedores publican sus servicios con fotos y precios.</p>
-                    <ul class="feature-list">
-                        <li>Filtros inteligentes de búsqueda</li>
-                        <li>Perfiles verificados</li>
-                        <li>Galería de imágenes</li>
-                        <li>Precios transparentes</li>
-                    </ul>
+            <!-- System Status -->
+            <section class="section">
+                <div class="section-header">
+                    <h2>📊 Estado del Sistema</h2>
                 </div>
-                
-                <div class="feature-card">
-                    <div class="feature-step">2</div>
-                    <div class="feature-icon">💬</div>
-                    <h3>Conecta y Coordina</h3>
-                    <p>Sistema de mensajería integrado para coordinar detalles, precios y horarios de forma segura.</p>
-                    <ul class="feature-list">
-                        <li>Chat en tiempo real</li>
-                        <li>Intercambio de archivos</li>
-                        <li>Notificaciones automáticas</li>
-                        <li>Historial de conversaciones</li>
-                    </ul>
+                <div class="status-grid">
+                    <div class="status-card">
+                        <h3>🗄️ Base de Datos</h3>
+                        <p class="<?php echo $hasError ? 'warning' : 'success'; ?>">
+                            <?php echo $systemStatus; ?>
+                        </p>
+                        <small>MariaDB/MySQL</small>
+                    </div>
+                    <div class="status-card">
+                        <h3>🌐 Servidor Web</h3>
+                        <p class="success">✅ Apache funcionando</p>
+                        <small>PHP <?php echo phpversion(); ?></small>
+                    </div>
+                    <div class="status-card">
+                        <h3>ℹ️ Sistema</h3>
+                        <p>IP: <?php echo $_SERVER['SERVER_ADDR'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost'; ?></p>
+                        <small>Versión: <?php echo SITE_VERSION; ?></small>
+                    </div>
                 </div>
-                
-                <div class="feature-card">
-                    <div class="feature-step">3</div>
-                    <div class="feature-icon">✅</div>
-                    <h3>Completa y Califica</h3>
-                    <p>Una vez completado el servicio, ambas partes pueden calificar la experiencia para mantener la calidad.</p>
-                    <ul class="feature-list">
-                        <li>Sistema de calificaciones 1-5 estrellas</li>
-                        <li>Comentarios detallados</li>
-                        <li>Historial de trabajos</li>
-                        <li>Construcción de reputación</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </section>
+            </section>
 
-    <!-- Categories Section -->
-    <?php if (!empty($categorias)): ?>
-    <section id="servicios" class="categories-section">
-        <div class="container">
-            <div class="section-header">
-                <h2>Categorías de Servicios</h2>
-                <p>Encuentra exactamente lo que necesitas</p>
-            </div>
-            
-            <div class="categories-grid">
-                <?php foreach ($categorias as $categoria): ?>
-                <div class="category-card">
-                    <div class="category-icon">
-                        <?php if (strpos($categoria['icono'], 'fa-') === 0): ?>
-                            <i class="fas <?php echo htmlspecialchars($categoria['icono']); ?>"></i>
-                        <?php else: ?>
-                            <span><?php echo htmlspecialchars($categoria['icono'] ?: '🔧'); ?></span>
-                        <?php endif; ?>
-                    </div>
-                    <h3><?php echo htmlspecialchars($categoria['nombre']); ?></h3>
-                    <p><?php echo htmlspecialchars($categoria['descripcion']); ?></p>
-                    <a href="register.php?categoria=<?php echo $categoria['id']; ?>" class="category-link">
-                        Ver servicios →
-                    </a>
+            <?php if (!empty($categorias)): ?>
+            <!-- Categories -->
+            <section class="section">
+                <div class="section-header">
+                    <h2>📂 Categorías de Servicios</h2>
                 </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- Featured Services Section -->
-    <?php if (!empty($serviciosDestacados)): ?>
-    <section class="featured-services-section">
-        <div class="container">
-            <div class="section-header">
-                <h2>⭐ Servicios Destacados</h2>
-                <p>Los mejores proveedores con las mejores calificaciones</p>
-            </div>
-            
-            <div class="services-grid">
-                <?php foreach ($serviciosDestacados as $servicio): ?>
-                <div class="service-card">
-                    <div class="service-badges">
-                        <span class="featured-badge">⭐ Destacado</span>
-                        <span class="category-badge">
-                            <?php echo htmlspecialchars($servicio['categoria_icono'] ?: '🔧'); ?>
-                            <?php echo htmlspecialchars($servicio['categoria_nombre']); ?>
-                        </span>
-                    </div>
-                    <h3 class="service-title"><?php echo htmlspecialchars($servicio['titulo']); ?></h3>
-                    <p class="service-description"><?php echo htmlspecialchars(substr($servicio['descripcion'], 0, 120)) . '...'; ?></p>
-                    <div class="service-price">
-                        <span class="price"><?php echo formatPrice($servicio['precio_desde'], $servicio['tipo_precio']); ?></span>
-                        <?php if ($servicio['precio_hasta'] && $servicio['precio_hasta'] > $servicio['precio_desde']): ?>
-                            <span class="price-range"> - <?php echo formatPrice($servicio['precio_hasta']); ?></span>
-                        <?php endif; ?>
-                    </div>
-                    <div class="service-provider">
-                        <div class="provider-info">
-                            <span class="provider-name">
-                                👤 <?php echo htmlspecialchars($servicio['proveedor_nombre'] . ' ' . $servicio['proveedor_apellido']); ?>
-                            </span>
-                            <?php if ($servicio['calificacion_promedio']): ?>
-                            <div class="rating">
-                                <?php echo generateStars($servicio['calificacion_promedio']); ?>
-                                <span class="rating-number">(<?php echo round($servicio['calificacion_promedio'], 1); ?>)</span>
-                            </div>
-                            <?php endif; ?>
+                <div class="categories-grid">
+                    <?php foreach ($categorias as $categoria): ?>
+                    <div class="category-card">
+                        <div class="category-icon">
+                            <?php echo htmlspecialchars($categoria['icono'] ?: '🔧'); ?>
                         </div>
+                        <h3><?php echo htmlspecialchars($categoria['nombre']); ?></h3>
+                        <p><?php echo htmlspecialchars($categoria['descripcion'] ?: 'Servicios profesionales'); ?></p>
                     </div>
-                    <div class="service-footer">
-                        <span class="location">📍 <?php echo htmlspecialchars($servicio['ubicacion_servicio'] ?: 'Ubicación no especificada'); ?></span>
-                        <a href="register.php?servicio=<?php echo $servicio['id']; ?>" class="btn btn-primary btn-sm">
-                            Contactar
-                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+            <?php endif; ?>
+
+            <!-- Features -->
+            <section class="section">
+                <div class="section-header">
+                    <h2>¿Cómo funciona <?php echo SITE_NAME; ?>?</h2>
+                    <p>Proceso simple y seguro en 3 pasos</p>
+                </div>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-step">1</div>
+                        <div class="feature-icon">🔍</div>
+                        <h3>Busca o Publica</h3>
+                        <p>Los clientes buscan servicios por categoría y ubicación. Los proveedores publican sus servicios con fotos y precios.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-step">2</div>
+                        <div class="feature-icon">💬</div>
+                        <h3>Conecta y Coordina</h3>
+                        <p>Sistema de mensajería integrado para coordinar detalles, precios y horarios de forma segura.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-step">3</div>
+                        <div class="feature-icon">✅</div>
+                        <h3>Completa y Califica</h3>
+                        <p>Una vez completado el servicio, ambas partes pueden calificar la experiencia para mantener la calidad.</p>
                     </div>
                 </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
+            </section>
 
-    <!-- Testimonials Section -->
-    <?php if (!empty($calificacionesDestacadas)): ?>
-    <section id="testimonios" class="testimonials-section">
-        <div class="container">
-            <div class="section-header">
-                <h2>💬 Lo que dicen nuestros usuarios</h2>
-                <p>Experiencias reales de nuestra comunidad</p>
-            </div>
-            
-            <div class="testimonials-grid">
-                <?php foreach ($calificacionesDestacadas as $calificacion): ?>
-                <div class="testimonial-card">
-                    <div class="testimonial-header">
-                        <div class="testimonial-rating">
-                            <?php echo generateStars($calificacion['puntuacion']); ?>
-                        </div>
-                        <span class="testimonial-date"><?php echo timeAgo($calificacion['fecha_calificacion']); ?></span>
-                    </div>
-                    <blockquote class="testimonial-content">
-                        "<?php echo htmlspecialchars($calificacion['comentario']); ?>"
-                    </blockquote>
-                    <div class="testimonial-footer">
-                        <div class="testimonial-client">
-                            <strong><?php echo htmlspecialchars($calificacion['cliente_nombre'] . ' ' . $calificacion['cliente_apellido']); ?></strong>
-                            <span class="service-info">sobre "<?php echo htmlspecialchars($calificacion['servicio_titulo']); ?>"</span>
-                        </div>
-                        <div class="testimonial-provider">
-                            <span>por <?php echo htmlspecialchars($calificacion['proveedor_nombre'] . ' ' . $calificacion['proveedor_apellido']); ?></span>
-                        </div>
-                    </div>
-                </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- Technology Section -->
-    <section class="technology-section">
-        <div class="container">
-            <div class="section-header">
-                <h2>🛠️ Tecnología de Vanguardia</h2>
-                <p>Sistema robusto desarrollado con las mejores prácticas</p>
-            </div>
-            
-            <div class="tech-features">
-                <div class="tech-grid">
-                    <div class="tech-card">
-                        <div class="tech-icon">🗄️</div>
-                        <h3>Base de Datos Avanzada</h3>
-                        <div class="tech-details">
-                            <span class="tech-item">12 tablas relacionadas</span>
-                            <span class="tech-item">Índices optimizados</span>
-                            <span class="tech-item">Backup automático</span>
-                            <span class="tech-item">MariaDB/MySQL</span>
-                        </div>
-                    </div>
-                    
-                    <div class="tech-card">
-                        <div class="tech-icon">🔒</div>
-                        <h3>Seguridad Integral</h3>
-                        <div class="tech-details">
-                            <span class="tech-item">Encriptación de contraseñas</span>
-                            <span class="tech-item">Verificación de email</span>
-                            <span class="tech-item">Logs de actividad</span>
-                            <span class="tech-item">Protección SQL injection</span>
-                        </div>
-                    </div>
-                    
-                    <div class="tech-card">
-                        <div class="tech-icon">⚡</div>
-                        <h3>Rendimiento Optimizado</h3>
-                        <div class="tech-details">
-                            <span class="tech-item">Queries optimizadas</span>
-                            <span class="tech-item">Cache inteligente</span>
-                            <span class="tech-item">CDN para imágenes</span>
-                            <span class="tech-item">Respuesta < 200ms</span>
-                        </div>
-                    </div>
-                    
-                    <div class="tech-card">
-                        <div class="tech-icon">📱</div>
-                        <h3>Diseño Responsive</h3>
-                        <div class="tech-details">
-                            <span class="tech-item">Mobile-first design</span>
-                            <span class="tech-item">Compatible todos los dispositivos</span>
-                            <span class="tech-item">PWA ready</span>
-                            <span class="tech-item">Touch optimizado</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- CTA Section -->
-    <section class="cta-section">
-        <div class="container">
-            <div class="cta-content">
+            <!-- CTA -->
+            <section class="cta-section">
                 <h2>¿Listo para comenzar?</h2>
-                <p>Únete a nuestra comunidad y descubre un mundo de servicios de calidad</p>
+                <p>Únete a nuestra comunidad de servicios de calidad</p>
                 <div class="cta-buttons">
-                    <a href="register.php?tipo=cliente" class="btn btn-primary btn-large">
-                        👤 Buscar Servicios
-                    </a>
-                    <a href="register.php?tipo=proveedor" class="btn btn-outline btn-large">
-                        🔧 Ofrecer Servicios
-                    </a>
+                    <a href="login.php" class="btn btn-primary">🔑 Iniciar Sesión</a>
+                    <a href="register.php" class="btn btn-outline">📝 Registrarse</a>
                 </div>
-                <p class="cta-note">
-                    ✨ Registro gratuito • Sin comisiones ocultas • Soporte 24/7
-                </p>
-            </div>
+                <p><small>✨ Registro gratuito • Sistema seguro • Soporte 24/7</small></p>
+            </section>
         </div>
-    </section>
+    </main>
 
     <!-- Footer -->
-    <footer class="main-footer">
+    <footer class="footer">
         <div class="container">
             <div class="footer-content">
                 <div class="footer-section">
                     <h4><?php echo SITE_NAME; ?></h4>
                     <p><?php echo SITE_DESCRIPTION; ?></p>
-                    <div class="footer-stats">
-                        <span><?php echo number_format($stats['usuarios']['total']); ?> usuarios</span>
-                        <span><?php echo number_format($stats['servicios']['total']); ?> servicios</span>
-                        <span><?php echo number_format($stats['reservas']['total']); ?> trabajos</span>
-                    </div>
                 </div>
-                
                 <div class="footer-section">
-                    <h4>Para Clientes</h4>
-                    <ul class="footer-links">
-                        <li><a href="register.php?tipo=cliente">Buscar servicios</a></li>
-                        <li><a href="#categorias">Ver categorías</a></li>
-                        <li><a href="#como-funciona">Cómo funciona</a></li>
-                        <li><a href="#testimonios">Testimonios</a></li>
-                    </ul>
+                    <h4>Sistema</h4>
+                    <p>Apache + PHP <?php echo phpversion(); ?></p>
+                    <p>MariaDB/MySQL</p>
+                    <p>AlmaLinux compatible</p>
                 </div>
-                
                 <div class="footer-section">
-                    <h4>Para Proveedores</h4>
-                    <ul class="footer-links">
-                        <li><a href="register.php?tipo=proveedor">Ofrecer servicios</a></li>
-                        <li><a href="#ventajas">Ventajas</a></li>
-                        <li><a href="#precios">Planes y precios</a></li>
-                        <li><a href="#recursos">Recursos</a></li>
-                    </ul>
-                </div>
-                
-                <div class="footer-section">
-                    <h4>Soporte</h4>
-                    <ul class="footer-links">
-                        <li><a href="ayuda.php">Centro de ayuda</a></li>
-                        <li><a href="contacto.php">Contacto</a></li>
-                        <li><a href="terminos.php">Términos y condiciones</a></li>
-                        <li><a href="privacidad.php">Política de privacidad</a></li>
-                    </ul>
-                </div>
-            </div>
-            
-            <div class="footer-bottom">
-                <div class="footer-tech">
-                    <span>🖥️ Apache + PHP <?php echo phpversion(); ?></span>
-                    <span>🗄️ MariaDB</span>
-                    <span>🐧 AlmaLinux</span>
-                    <span>⚙️ v<?php echo SITE_VERSION; ?></span>
-                </div>
-                <div class="footer-copyright">
-                    <p>&copy; 2025 <strong>SmartCodeUy</strong> - Todos los derechos reservados</p>
-                    <p>Sistema completo de gestión de servicios</p>
+                    <h4>Información</h4>
+                    <p>Versión: <?php echo SITE_VERSION; ?></p>
+                    <p>&copy; 2025 SmartCodeUy</p>
+                    <p>Sistema de gestión de servicios</p>
                 </div>
             </div>
         </div>
     </footer>
 
-    <script src="assets/js/welcome.js"></script>
     <script>
-        // Navegación suave
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                document.querySelector(this.getAttribute('href')).scrollIntoView({
-                    behavior: 'smooth'
+        // Animaciones simples
+        document.addEventListener('DOMContentLoaded', function() {
+            const cards = document.querySelectorAll('.status-card, .category-card, .feature-card');
+            
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.style.opacity = '1';
+                        entry.target.style.transform = 'translateY(0)';
+                    }
                 });
+            }, {
+                threshold: 0.1
+            });
+            
+            cards.forEach(card => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                card.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+                observer.observe(card);
             });
         });
-
-        // Toggle mobile navigation
-        function toggleMobileNav() {
-            const nav = document.querySelector('.nav-links');
-            nav.classList.toggle('mobile-open');
-        }
-
-        // Animaciones en scroll
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('animate-in');
-                }
-            });
-        }, observerOptions);
-
-        // Observar elementos para animación
-        document.querySelectorAll('.feature-card, .category-card, .service-card, .testimonial-card, .tech-card').forEach(el => {
-            observer.observe(el);
-        });
-
-        // Contador animado en hero stats
-        function animateCounters() {
-            const counters = document.querySelectorAll('.stat-number');
-            counters.forEach(counter => {
-                const target = parseInt(counter.textContent.replace(/[^0-9]/g, ''));
-                if (target > 0) {
-                    let current = 0;
-                    const increment = target / 50;
-                    const timer = setInterval(() => {
-                        current += increment;
-                        if (current >= target) {
-                            current = target;
-                            clearInterval(timer);
-                        }
-                        const formatted = Math.floor(current).toLocaleString();
-                        counter.textContent = counter.textContent.replace(/[0-9,]+/, formatted);
-                    }, 30);
-                }
-            });
-        }
-
-        // Iniciar animación de contadores cuando la sección sea visible
-        const heroObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    animateCounters();
-                    heroObserver.unobserve(entry.target);
-                }
-            });
-        });
-
-        const heroStats = document.querySelector('.hero-stats');
-        if (heroStats) {
-            heroObserver.observe(heroStats);
-        }
     </script>
 </body>
 </html>
